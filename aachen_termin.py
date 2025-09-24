@@ -22,6 +22,33 @@ DOB   = os.getenv("APPLICANT_DOB","")
 def log(msg):
     print(time.strftime("[%Y-%m-%d %H:%M:%S]"), msg, flush=True)
 
+def send_error_notification(error_msg, exception=None):
+    """发送错误通知到Matrix"""
+    try:
+        if exception:
+            full_msg = f"🚨 SuperC 预约程序出错：{error_msg}\n\n错误详情：{str(exception)}"
+        else:
+            full_msg = f"🚨 SuperC 预约程序出错：{error_msg}"
+
+        log(f"发送错误通知: {full_msg}")
+        send_text(full_msg)
+        log("已发送错误通知到Matrix")
+    except Exception as e:
+        log(f"发送错误通知失败: {e}")
+        # 即使Matrix通知失败也要记录原始错误
+        log(f"原始错误: {error_msg} - {exception}")
+
+def send_success_notification(message):
+    """发送成功通知到Matrix"""
+    try:
+        log(message)
+        send_text(message)
+        log("已发送Matrix通知")
+    except Exception as e:
+        log(f"发送Matrix通知失败: {e}")
+        # 如果Matrix通知失败，发送错误通知
+        send_error_notification("Matrix通知发送失败", e)
+
 def accept_cookies(page):
     for pat in ["Einverstanden", "Akzept", "Zustimmen", "Okay"]:
         try:
@@ -86,7 +113,9 @@ def select_anliegen(page, text, count=1):
             continue
 
     if not found:
-        raise Exception(f"未找到选项: {text}")
+        error_msg = f"未找到选项: {text}"
+        send_error_notification(f"选择事项失败 - {error_msg}")
+        raise Exception(error_msg)
 
     # 在点击Weiter之前处理可能的模态对话框
     max_attempts = 5
@@ -120,7 +149,9 @@ def select_anliegen(page, text, count=1):
                 except Exception as e:
                     log(f"JavaScript点击失败: {e}")
             else:
-                log("多次尝试点击Weiter按钮失败")
+                error_msg = "多次尝试点击Weiter按钮失败"
+                log(error_msg)
+                send_error_notification("选择事项后无法点击Weiter按钮")
                 raise
 
 def handle_modal_dialog(page):
@@ -245,7 +276,9 @@ def select_standort(page, text):
                 except Exception as e:
                     log(f"JavaScript点击失败: {e}")
             else:
-                log("多次尝试点击Weiter按钮失败")
+                error_msg = "多次尝试点击Weiter按钮失败"
+                log(error_msg)
+                send_error_notification("选择地点后无法点击Weiter按钮")
                 raise
 
 def find_and_click_first_slot(page, monitor_only=False):
@@ -254,18 +287,84 @@ def find_and_click_first_slot(page, monitor_only=False):
     if ("keine termine" in html) or ("keine termine frei" in html):
         return [] if monitor_only else False
 
-    # 策略1：直接找含有"Uhr"或时间模式的可点击按钮/链接
-    patterns = [r"\b\d{1,2}:\d{2}\b", r"\bUhr\b"]
     available_slots = []
-    for role in ["button", "link"]:
-        loc = page.get_by_role(role)
+
+    # 策略：查找日历结构，获取日期和时间信息
+    try:
+        # 尝试找到accordion header（日期标题）
+        date_headers = page.locator('.ui-accordion-header, h3[title], .date-header').all()
+
+        for header in date_headers:
+            try:
+                # 获取日期信息
+                date_text = header.get_attribute('title') or header.text_content() or ""
+                date_match = re.search(r'(\d{1,2}\.\d{1,2}\.\d{4})', date_text)
+                if not date_match:
+                    continue
+                date_str = date_match.group(1)
+
+                # 在该日期对应的panel中查找可用时间槽
+                panel_id = header.get_attribute('aria-controls')
+                if panel_id:
+                    panel = page.locator(f'#{panel_id}')
+                else:
+                    # 如果没有panel_id，查找下一个sibling
+                    panel = header.locator('+ *')
+
+                # 在panel中查找可用的时间按钮
+                buttons = panel.locator('button[type="submit"]:not([disabled]), button.suggest_btn:not([disabled])').all()
+                for button in buttons:
+                    try:
+                        if button.is_visible() and button.is_enabled():
+                            time_text = button.get_attribute('title') or button.text_content() or ""
+                            time_match = re.search(r'\b(\d{1,2}:\d{2})\b', time_text)
+                            if time_match:
+                                time_str = time_match.group(1)
+                                full_slot = f"{date_str} {time_str}"
+                                if monitor_only:
+                                    available_slots.append(full_slot)
+                                else:
+                                    button.click()
+                                    return True
+                    except Exception:
+                        continue
+
+            except Exception:
+                continue
+
+    except Exception:
+        pass
+
+    # 如果上面的策略失败，使用原来的策略
+    if not available_slots or not monitor_only:
+        # 策略1：直接找含有"Uhr"或时间模式的可点击按钮/链接
+        patterns = [r"\b\d{1,2}:\d{2}\b", r"\bUhr\b"]
+        for role in ["button", "link"]:
+            loc = page.get_by_role(role)
+            count = min(300, loc.count())
+            for i in range(count):
+                el = loc.nth(i)
+                try:
+                    if el.is_visible() and el.is_enabled():
+                        txt = (el.text_content() or "").strip()
+                        if txt and any(re.search(p, txt) for p in patterns):
+                            if monitor_only:
+                                available_slots.append(txt)
+                            else:
+                                el.click()
+                                return True
+                except Exception:
+                    pass
+
+        # 策略2：有的日历是 gridcell，可点击的格子
+        loc = page.get_by_role("gridcell")
         count = min(300, loc.count())
         for i in range(count):
             el = loc.nth(i)
             try:
                 if el.is_visible() and el.is_enabled():
                     txt = (el.text_content() or "").strip()
-                    if txt and any(re.search(p, txt) for p in patterns):
+                    if txt and not re.search(r"ausgebucht|nicht verfügbar", txt, re.I):
                         if monitor_only:
                             available_slots.append(txt)
                         else:
@@ -273,23 +372,6 @@ def find_and_click_first_slot(page, monitor_only=False):
                             return True
             except Exception:
                 pass
-
-    # 策略2：有的日历是 gridcell，可点击的格子
-    loc = page.get_by_role("gridcell")
-    count = min(300, loc.count())
-    for i in range(count):
-        el = loc.nth(i)
-        try:
-            if el.is_visible() and el.is_enabled():
-                txt = (el.text_content() or "").strip()
-                if txt and not re.search(r"ausgebucht|nicht verfügbar", txt, re.I):
-                    if monitor_only:
-                        available_slots.append(txt)
-                    else:
-                        el.click()
-                        return True
-        except Exception:
-            pass
 
     return available_slots if monitor_only else False
 
@@ -375,59 +457,68 @@ def run_once(headless=False):
         log(f"检测到锁文件 {LOCK_FILE}，已预约成功过——退出以防重复占号。")
         return True
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        ctx_kwargs = {}
-        if Path(STORAGE_STATE).exists():
-            ctx_kwargs["storage_state"] = STORAGE_STATE
-        ctx = browser.new_context(**ctx_kwargs)
-        page = ctx.new_page()
-        page.set_default_timeout(15000)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=headless)
+            ctx_kwargs = {}
+            if Path(STORAGE_STATE).exists():
+                ctx_kwargs["storage_state"] = STORAGE_STATE
+            ctx = browser.new_context(**ctx_kwargs)
+            page = ctx.new_page()
+            page.set_default_timeout(15000)
 
-        goto_start(page)
-        # Schritt 2: 事项
-        select_anliegen(page, ANLIEGEN, count=1)
-        # Schritt 3: 地点
-        select_standort(page, STANDORT)
+            goto_start(page)
+            # Schritt 2: 事项
+            select_anliegen(page, ANLIEGEN, count=1)
+            # Schritt 3: 地点
+            select_standort(page, STANDORT)
 
-        # Schritt 4: 日历
-        if not find_and_click_first_slot(page):
-            log("当前无可用时间。")
-            browser.close()
-            return False
+            # Schritt 4: 日历
+            if not find_and_click_first_slot(page):
+                log("当前无可用时间。")
+                browser.close()
+                return False
 
-        # 进到个人信息页
-        if not proceed_until_personal(page):
-            log("未能进入个人信息页（可能页面流程更新，建议 headless=False 观察）。")
-            browser.close()
-            return False
+            # 进到个人信息页
+            if not proceed_until_personal(page):
+                error_msg = "未能进入个人信息页（可能页面流程更新，建议 headless=False 观察）。"
+                log(error_msg)
+                send_error_notification("无法进入个人信息页面，可能页面流程已更新")
+                browser.close()
+                return False
 
-        # 填表 + 人工验证码
-        fill_personal_data(page)
-        solve_captcha_human_in_loop(page)
+            # 填表 + 人工验证码
+            fill_personal_data(page)
+            solve_captcha_human_in_loop(page)
 
-        # 提交或停在最后一步
-        if AUTO_BOOK:
+            # 提交或停在最后一步
+            if AUTO_BOOK:
+                try:
+                    page.get_by_role("button", name=re.compile("Termin.*buchen|Absenden|Reservieren|Weiter", re.I)).click(timeout=3000)
+                    log("已提交预约表单；请尽快去邮箱点确认链接（不点不生效）。")
+                except PWTimeout:
+                    log("未找到提交按钮，可能仍需点击\"Weiter\"或确认对话框。")
+            else:
+                log("已停在最后一步，请手动点\"提交/预约\"；随后到邮箱点确认链接。")
+
+            # 保存 storage state（复用"下次免填"）
             try:
-                page.get_by_role("button", name=re.compile("Termin.*buchen|Absenden|Reservieren|Weiter", re.I)).click(timeout=3000)
-                log("已提交预约表单；请尽快去邮箱点确认链接（不点不生效）。")
-            except PWTimeout:
-                log("未找到提交按钮，可能仍需点击“Weiter”或确认对话框。")
-        else:
-            log("已停在最后一步，请手动点“提交/预约”；随后到邮箱点确认链接。")
+                ctx.storage_state(path=STORAGE_STATE)
+            except Exception:
+                pass
 
-        # 保存 storage state（复用“下次免填”）
-        try:
-            ctx.storage_state(path=STORAGE_STATE)
-        except Exception:
-            pass
+            browser.close()
+            # 成功与否以你的手动提交/邮件确认为准；这里先写锁，避免重复占号
+            # 如果你只想在邮件确认后写锁，可以把这两行改为：等你确认成功后手动创建锁文件。
+            if AUTO_BOOK:
+                Path(LOCK_FILE).write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
+            return True
 
-        browser.close()
-        # 成功与否以你的手动提交/邮件确认为准；这里先写锁，避免重复占号
-        # 如果你只想在邮件确认后写锁，可以把这两行改为：等你确认成功后手动创建锁文件。
-        if AUTO_BOOK:
-            Path(LOCK_FILE).write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
-        return True
+    except Exception as e:
+        error_msg = f"预约流程执行失败：{str(e)}"
+        log(error_msg)
+        send_error_notification("预约流程执行过程中出现错误", e)
+        return False
 
 def check_availability(headless=True):
     """仅检查是否有可用时间槽，不进行预约。返回可用时间槽列表。"""
@@ -540,27 +631,34 @@ def check_availability(headless=True):
             return available_slots
 
         except Exception as e:
-            log(f"检查可用性时出错: {e}")
+            error_msg = f"检查可用性时出错: {e}"
+            log(error_msg)
+            send_error_notification("检查预约可用性时发生错误", e)
             browser.close()
             return []
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--monitor":
-        # 监控模式：检查可用性并发送通知
-        slots = check_availability()
-        if slots:
-            slots_with_time = [f"{slot} ({time.strftime('%Y-%m-%d %H:%M')})" for slot in slots[:5]]
-            message = f"⚠️ SuperC Auslandsamt 的 termin 发现可约：{', '.join(slots_with_time)}，请立即手动预约。"
-            log(message)
-            try:
-                send_text(message)
-                log("已发送Matrix通知")
-            except Exception as e:
-                log(f"发送Matrix通知失败: {e}")
+    try:
+        if len(sys.argv) > 1 and sys.argv[1] == "--monitor":
+            # 监控模式：检查可用性并发送通知
+            slots = check_availability()
+            if slots:
+                message = f"⚠️ SuperC Auslandsamt 的 termin 发现可约：{', '.join(slots[:5])}，请立即手动预约。"
+                send_success_notification(message)
+            else:
+                log("当前无可用时间。")
         else:
-            log("当前无可用时间。")
-    else:
-        # 常规模式：完整预约流程
-        ok = run_once(headless=False)
-        if not ok:
-            sys.exit(2)
+            # 常规模式：完整预约流程
+            ok = run_once(headless=False)
+            if not ok:
+                send_error_notification("完整预约流程执行失败")
+                sys.exit(2)
+
+    except KeyboardInterrupt:
+        log("程序被用户中断")
+        sys.exit(0)
+    except Exception as e:
+        error_msg = f"程序运行出现未处理的异常：{str(e)}"
+        log(error_msg)
+        send_error_notification("程序运行出现严重错误", e)
+        sys.exit(1)
