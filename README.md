@@ -18,7 +18,6 @@
 │   └── main.py            # 主业务逻辑
 ├── main.py                # 程序入口
 ├── mx_send.py             # Matrix 消息发送（原有）
-├── aachen_termin.py       # 原始代码（保留）
 ├── run_monitor.sh         # 定时运行脚本
 └── .env                   # 配置文件
 ```
@@ -79,4 +78,4 @@ export MATRIX_ROOM_ID=!room_id:server.com
 
 ✅ **重构完成**：新架构已经过测试，功能完全正常
 ✅ **定时任务正常**：每10分钟自动检查，使用重构后的代码
-✅ **向后兼容**：原始代码 `aachen_termin.py` 保留作为备份
+ℹ️ **历史版本**：旧版 `aachen_termin.py` 可在 Git 历史中查看
