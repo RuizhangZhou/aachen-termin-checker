@@ -41,6 +41,7 @@ run_monitor.sh
 debug_*.png
 captcha_*.png
 *.log
+cron.log.*
 
 # Browser automation
 state.json
