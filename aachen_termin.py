@@ -649,7 +649,7 @@ if __name__ == "__main__":
                 log("当前无可用时间。")
         else:
             # 常规模式：完整预约流程
-            ok = run_once(headless=False)
+            ok = run_once(headless=True)
             if not ok:
                 send_error_notification("完整预约流程执行失败")
                 sys.exit(2)

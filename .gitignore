@@ -31,6 +31,12 @@ env/
 .env.local
 .env.production
 
+# Scripts with sensitive info
+run_monitor.sh
+
+# Legacy files (keep during transition)
+# aachen_termin.py
+
 # Debug files
 debug_*.png
 captcha_*.png
