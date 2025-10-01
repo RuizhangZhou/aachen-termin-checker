@@ -46,6 +46,7 @@ cron.log.*
 # Browser automation
 state.json
 *.lock
+.monitor_no_slot_sent
 
 # IDE
 .vscode/
