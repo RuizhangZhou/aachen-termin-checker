@@ -1,6 +1,4 @@
-"""
-浏览器操作基础模块
-"""
+"""Core browser helpers."""
 import re
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -9,7 +7,7 @@ from .notifications import log
 
 
 class BrowserManager:
-    """浏览器管理器"""
+    """Browser manager context helper."""
 
     def __init__(self, headless=True):
         self.headless = headless
@@ -40,7 +38,7 @@ class BrowserManager:
 
 
 def accept_cookies(page):
-    """接受网站 cookies"""
+    """Accept site cookies when banners appear."""
     for pat in ["Einverstanden", "Akzept", "Zustimmen", "Okay"]:
         try:
             page.get_by_role("button", name=re.compile(pat, re.I)).click(timeout=2500)
@@ -50,10 +48,10 @@ def accept_cookies(page):
 
 
 def handle_modal_dialog(page):
-    """处理模态对话框"""
-    log("检测到模态对话框，尝试处理...")
+    """Handle modal dialogs that block progress."""
+    log("Modal dialog detected, attempting to handle it...")
 
-    # 尝试点击各种可能的确认按钮
+    # Try to click through common confirmation buttons
     confirm_patterns = [
         "Verstanden", "OK", "Schließen", "Weiter", "Bestätigen",
         "Ja", "Akzeptieren", "Fortfahren", "Continue"
@@ -61,36 +59,36 @@ def handle_modal_dialog(page):
 
     for pattern in confirm_patterns:
         try:
-            # 尝试通过按钮文本点击
+            # First attempt to click via button text
             button = page.locator(f'button:has-text("{pattern}")').first
             if button.is_visible(timeout=1000):
                 button.click()
-                log(f"已点击模态对话框确认按钮: {pattern}")
+                log(f"Clicked modal confirmation button: {pattern}")
                 page.wait_for_timeout(1000)
                 return True
         except Exception:
             continue
 
-    # 尝试点击模态对话框中的任意按钮
+    # Fall back to clicking any button inside the modal
     try:
         modal_buttons = page.locator('.modal button, [role="dialog"] button, .dialog button').all()
         for button in modal_buttons:
             if button.is_visible():
                 button.click()
-                log("已点击模态对话框按钮")
+                log("Clicked a button inside the modal dialog")
                 page.wait_for_timeout(1000)
                 return True
     except Exception:
         pass
 
-    # 尝试按 ESC 键关闭
+    # Finally, try hitting Escape to dismiss it
     try:
         page.keyboard.press("Escape")
-        log("已按 ESC 键尝试关闭模态对话框")
+        log("Pressed Escape to dismiss the modal dialog")
         page.wait_for_timeout(1000)
         return True
     except Exception:
         pass
 
-    log("无法处理模态对话框")
+    log("Unable to handle the modal dialog")
     return False

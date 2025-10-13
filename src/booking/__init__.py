@@ -1,3 +1,1 @@
-"""
-Booking module - 预约相关功能
-"""
+"""Booking module - appointment workflow helpers."""

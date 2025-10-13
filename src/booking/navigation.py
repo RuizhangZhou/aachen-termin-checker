@@ -1,6 +1,4 @@
-"""
-页面导航模块
-"""
+"""Page navigation helpers."""
 import re
 from playwright.sync_api import TimeoutError as PWTimeout
 from ..config import START_URL
@@ -9,11 +7,11 @@ from ..notifications import log
 
 
 def goto_start(page):
-    """导航到起始页面"""
+    """Navigate to the start page."""
     page.goto(START_URL)
     accept_cookies(page)
 
-    # 如果是介绍页，通常会有"Weiter/Termin"按钮
+    # Intro pages often expose a "Weiter/Termin" button
     for pat in ["Weiter", "Termin", "Starten"]:
         try:
             page.get_by_role("button", name=re.compile(pat, re.I)).click(timeout=1500)
@@ -23,14 +21,14 @@ def goto_start(page):
 
 
 def click_aufenthaltsangelegenheiten(page):
-    """点击 Aufenthaltsangelegenheiten 按钮"""
-    log("点击 Aufenthaltsangelegenheiten...")
+    """Click the Aufenthaltsangelegenheiten entry."""
+    log("Clicking Aufenthaltsangelegenheiten...")
 
-    # 等待页面加载
+    # Wait for the page to stabilise
     page.wait_for_load_state('networkidle')
     page.wait_for_timeout(2000)
 
-    # 尝试多种方式点击
+    # Try multiple selectors to maximise compatibility
     selectors = [
         'text=Aufenthaltsangelegenheiten',
         '[href*="aufenthalt"]',
@@ -46,7 +44,7 @@ def click_aufenthaltsangelegenheiten(page):
                 page.wait_for_timeout(2000)
                 return True
         except Exception as e:
-            log(f"尝试选择器 {selector} 失败: {e}")
+            log(f"Failed using selector {selector}: {e}")
             continue
 
-    raise Exception("无法找到 Aufenthaltsangelegenheiten 链接")
+    raise Exception("Could not find the Aufenthaltsangelegenheiten link")

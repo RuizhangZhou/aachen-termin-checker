@@ -1,6 +1,4 @@
-"""
-主入口模块
-"""
+"""Main entry module."""
 import sys
 from pathlib import Path
 
@@ -14,106 +12,106 @@ from .booking.forms import proceed_until_personal, fill_personal_data, solve_cap
 
 
 def run_once(headless=True):
-    """执行完整的预约流程"""
+    """Execute the full booking workflow."""
     try:
         with BrowserManager(headless=headless) as page:
-            # 导航到起始页
+            # Navigate to the start page
             goto_start(page)
 
-            # 点击 Aufenthaltsangelegenheiten
+            # Click the Aufenthaltsangelegenheiten entry
             click_aufenthaltsangelegenheiten(page)
 
-            # Schritt 2: 事项
+            # Step 2: select the service
             select_anliegen(page, ANLIEGEN, count=1)
 
-            # Schritt 3: 地点
+            # Step 3: select the location
             select_standort(page, STANDORT)
 
-            # Schritt 4: 日历
+            # Step 4: pick a slot
             if not find_and_click_first_slot(page):
-                log("当前无可用时间。")
+                log("No slots currently available.")
                 return False
 
-            # 如果找到时间槽但不自动预约，则只通知
+            # Notify only when auto-booking is disabled
             if not AUTO_BOOK:
-                send_success_notification("⚠️ 发现可用时间槽，但未启用自动预约。请手动完成预约。")
+                send_success_notification("⚠️ Found available slots, but auto-booking is disabled. Please complete the booking manually.")
                 return True
 
-            # 检查是否已经预约过（避免重复预约）
+            # Avoid duplicate bookings by checking for the lock file
             if Path(LOCK_FILE).exists():
-                log("检测到锁定文件，跳过预约以避免重复")
+                log("Lock file detected; skipping booking to avoid duplicates")
                 return True
 
-            # Schritt 5: 继续到个人信息页面
+            # Step 5: continue to the personal information page
             if not proceed_until_personal(page):
-                send_error_notification("无法进入个人信息页面")
+                send_error_notification("Unable to reach the personal information page")
                 return False
 
-            # Schritt 6: 填写个人信息
+            # Step 6: fill in personal data
             fill_personal_data(page)
 
-            # Schritt 7: 处理可能的验证码
+            # Step 7: handle a captcha if present
             if page.locator('img[src*="captcha"], canvas, #captcha').count() > 0:
                 if not solve_captcha_human_in_loop(page):
-                    send_error_notification("验证码处理失败")
+                    send_error_notification("Captcha handling failed")
                     return False
 
-            # 最终提交
+            # Final submission
             try:
                 submit_button = page.get_by_role("button", name="Buchen")
                 if submit_button.is_visible(timeout=5000):
                     submit_button.click()
                     page.wait_for_timeout(3000)
 
-                    # 创建锁定文件以防止重复预约
+                    # Create the lock file to prevent duplicate bookings
                     Path(LOCK_FILE).touch()
 
-                    send_success_notification("🎉 预约成功！已自动完成预约流程。")
-                    log("预约流程完成")
+                    send_success_notification("🎉 Booking confirmed! The automated flow completed successfully.")
+                    log("Booking workflow completed")
                     return True
                 else:
-                    send_error_notification("找不到最终提交按钮")
+                    send_error_notification("Unable to locate the final submission button")
                     return False
 
             except Exception as e:
-                send_error_notification("最终提交时出错", e)
+                send_error_notification("Error during final submission", e)
                 return False
 
     except Exception as e:
-        log(f"预约流程执行失败：{e}")
-        send_error_notification("预约流程执行过程中出现错误", e)
+        log(f"Booking workflow failed: {e}")
+        send_error_notification("Error occurred while executing the booking workflow", e)
         return False
 
 
 def monitor_mode():
-    """监控模式：检查可用性并发送通知"""
+    """Monitor mode: check availability and send notifications."""
     slots = check_availability()
     if slots:
-        message = f"⚠️ SuperC Auslandsamt 的 termin 发现可约：{', '.join(slots[:5])}，请立即手动预约。"
+        message = f"⚠️ Appointment slots detected for SuperC Auslandsamt: {', '.join(slots[:5])}. Please book immediately."
         send_success_notification(message)
     else:
-        log("当前无可用时间。")
+        log("No slots currently available.")
 
 
 def main():
-    """主函数"""
+    """Entry point."""
     try:
         if len(sys.argv) > 1 and sys.argv[1] == "--monitor":
-            # 监控模式：检查可用性并发送通知
+            # Monitor mode: check availability and send notifications
             monitor_mode()
         else:
-            # 常规模式：完整预约流程
+            # Default mode: run the full booking workflow
             ok = run_once(headless=True)
             if not ok:
-                send_error_notification("完整预约流程执行失败")
+                send_error_notification("Full booking workflow failed to complete")
                 sys.exit(2)
 
     except KeyboardInterrupt:
-        log("程序被用户中断")
+        log("Execution interrupted by user")
         sys.exit(0)
     except Exception as e:
-        log(f"程序执行出错: {e}")
-        send_error_notification("程序执行异常", e)
+        log(f"Program execution error: {e}")
+        send_error_notification("Program encountered an error", e)
         sys.exit(1)
 
 

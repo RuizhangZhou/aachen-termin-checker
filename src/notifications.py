@@ -1,39 +1,37 @@
-"""
-通知系统模块
-"""
+"""Notification system module."""
 import time
 from mx_send import send_text
 
 
 def log(msg):
-    """记录日志信息"""
+    """Log a message."""
     print(time.strftime("[%Y-%m-%d %H:%M:%S]"), msg, flush=True)
 
 
 def send_error_notification(error_msg, exception=None):
-    """发送错误通知到Matrix"""
+    """Send an error notification to Matrix."""
     try:
         if exception:
-            full_msg = f"🚨 SuperC 预约程序出错：{error_msg}\n\n错误详情：{str(exception)}"
+            full_msg = f"🚨 SuperC booking bot error: {error_msg}\n\nDetails: {str(exception)}"
         else:
-            full_msg = f"🚨 SuperC 预约程序出错：{error_msg}"
+            full_msg = f"🚨 SuperC booking bot error: {error_msg}"
 
-        log(f"发送错误通知: {full_msg}")
+        log(f"Sending error notification: {full_msg}")
         send_text(full_msg)
-        log("已发送错误通知到Matrix")
+        log("Error notification sent to Matrix")
     except Exception as e:
-        log(f"发送错误通知失败: {e}")
-        # 即使Matrix通知失败也要记录原始错误
-        log(f"原始错误: {error_msg} - {exception}")
+        log(f"Failed to send error notification: {e}")
+        # Record the original error even if Matrix notification fails
+        log(f"Original error: {error_msg} - {exception}")
 
 
 def send_success_notification(message):
-    """发送成功通知到Matrix"""
+    """Send a success notification to Matrix."""
     try:
         log(message)
         send_text(message)
-        log("已发送Matrix通知")
+        log("Matrix notification sent")
     except Exception as e:
-        log(f"发送Matrix通知失败: {e}")
-        # 如果Matrix通知失败，发送错误通知
-        send_error_notification("Matrix通知发送失败", e)
+        log(f"Failed to send Matrix notification: {e}")
+        # Send an error notification when Matrix delivery fails
+        send_error_notification("Matrix notification delivery failed", e)

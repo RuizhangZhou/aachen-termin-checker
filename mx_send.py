@@ -1,7 +1,7 @@
 import os, uuid, requests
 
 MX_HS  = os.environ["MATRIX_HOMESERVER"]      # https://chat.rickandzoey.com
-MX_TOK = os.environ["MATRIX_ACCESS_TOKEN"]    # 第1步拿到的token
+MX_TOK = os.environ["MATRIX_ACCESS_TOKEN"]    # token obtained in step 1
 ROOM   = os.environ["MATRIX_ROOM_ID"]         # !abc123:rickandzoey.com
 
 def send_text(text: str):

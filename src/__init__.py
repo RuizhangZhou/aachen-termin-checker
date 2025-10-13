@@ -1,3 +1,1 @@
-"""
-Aachen Termin Bot - 自动预约系统
-"""
+"""Aachen Termin Bot - automated booking system."""
