@@ -49,6 +49,25 @@ def accept_cookies(page):
 
 def handle_modal_dialog(page):
     """Handle modal dialogs that block progress."""
+    modal_locators = '.modal-dialog, [role="dialog"], .modal.in'
+    modal = page.locator(modal_locators).first
+    has_modal = False
+    try:
+        has_modal = modal.count() > 0 and modal.is_visible(timeout=500)
+    except Exception:
+        has_modal = False
+
+    if not has_modal:
+        # Fallback: look for common OK buttons even if the dialog wrapper is missing
+        try:
+            ok_button = page.locator('button#OKButton, button.btn-ok, button:has-text("OK")').first
+            has_modal = ok_button.is_visible(timeout=500)
+        except Exception:
+            has_modal = False
+
+    if not has_modal:
+        return False
+
     log("Modal dialog detected, attempting to handle it...")
 
     # Try to click through common confirmation buttons

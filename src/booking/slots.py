@@ -1,7 +1,12 @@
 """Slot discovery and booking helpers."""
+from datetime import datetime
 from typing import List, Tuple
+
 from playwright.sync_api import Locator
-from ..notifications import log
+
+from ..browser import BrowserManager, handle_modal_dialog
+from ..config import ANLIEGEN, SEND_MONITOR_SCREENSHOT
+from ..notifications import log, send_screenshot_notification
 
 
 def _extract_slots_from_calendar(page) -> List[Tuple[str, str, Locator]]:
@@ -112,8 +117,6 @@ def find_and_click_first_slot(page, monitor_only=False):
 
 def check_availability():
     """Check availability using the simplified legacy flow."""
-    from ..browser import BrowserManager
-    from ..config import ANLIEGEN, STANDORT
     from .navigation import goto_start, click_aufenthaltsangelegenheiten
 
     with BrowserManager(headless=True) as page:
@@ -165,6 +168,11 @@ def check_availability():
                 weiter_btn = page.get_by_role("button", name="Weiter")
                 weiter_btn.click()
                 log("Successfully clicked the Weiter button")
+                # Some Anliegen show a confirmation modal that must be acknowledged
+                page.wait_for_timeout(800)
+                handled_modal = handle_modal_dialog(page)
+                if handled_modal:
+                    log("Dismissed the Hinweis modal after selecting the Anliegen")
             except Exception as e:
                 log(f"Failed to click the Weiter button: {e}")
 
@@ -172,6 +180,7 @@ def check_availability():
             page.wait_for_timeout(2000)
 
             # Simplified location selection - choose the first available option
+            progressed = False
             try:
                 first_location = page.locator('input[type="radio"], input[type="checkbox"]').first
                 if first_location.count() > 0:
@@ -183,13 +192,102 @@ def check_availability():
                     weiter_btn = page.get_by_role("button", name="Weiter")
                     weiter_btn.click()
                     log("Clicked the Weiter button on the location page")
+                    progressed = True
             except Exception as e:
-                log(f"Failed to select a location: {e}")
+                log(f"Failed to select a location via radio buttons: {e}")
+
+            if not progressed:
+                progressed = _submit_location_form(page)
+
+            if _handle_error_page(page):
+                return []
+
+            if progressed:
+                page.wait_for_load_state('networkidle')
+                page.wait_for_timeout(2000)
 
             # Check the availability calendar again
             available_slots = find_and_click_first_slot(page, monitor_only=True)
+            _send_monitor_screenshot(page, available_slots)
             return available_slots if available_slots else []
 
         except Exception as e:
             log(f"Error while checking availability: {e}")
             return []
+
+
+def _send_monitor_screenshot(page, slots):
+    """Optionally send a screenshot for debugging to confirm calendar access."""
+    if not SEND_MONITOR_SCREENSHOT:
+        return
+
+    try:
+        now = datetime.now()
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        status = f"found {len(slots)} appointments" if slots else "no appointments this run"
+        message = f"📸 RWTH monitor screenshot @ {timestamp}: {status}"
+        filename = f"rwth_monitor_{now:%Y%m%d_%H%M%S}.png"
+        image_bytes = page.screenshot(full_page=True)
+        send_screenshot_notification(message, image_bytes, filename=filename)
+    except Exception as exc:
+        log(f"Unable to capture/send screenshot: {exc}")
+
+
+def _submit_location_form(page) -> bool:
+    """Handle Standort pages that present a standalone form without radio buttons."""
+    try:
+        forms = page.locator("form:has(input[name='select_location'])")
+        count = forms.count()
+        if count == 0:
+            log("No Standort form with select_location found")
+            return False
+
+        for idx in range(count):
+            form = forms.nth(idx)
+            try:
+                if not form.is_visible():
+                    continue
+            except Exception:
+                continue
+
+            submit = form.locator("input[name='select_location'], button[name='select_location'], #WeiterButton").first
+            if submit.count() == 0:
+                continue
+
+            try:
+                submit.wait_for(state="visible", timeout=3000)
+            except Exception:
+                pass
+
+            try:
+                submit.scroll_into_view_if_needed()
+            except Exception:
+                pass
+
+            try:
+                submit.click()
+            except Exception:
+                # Fallback to form submission via JavaScript
+                form.evaluate("(el) => el.requestSubmit ? el.requestSubmit() : el.submit()")
+
+            log("Submitted Standort form via Weiter button")
+            page.wait_for_timeout(1000)
+            return True
+
+        log("No visible Standort submit button was clickable")
+        return False
+    except Exception as exc:
+        log(f"Failed to submit Standort form: {exc}")
+        return False
+
+
+def _handle_error_page(page) -> bool:
+    """Detect the TEVIS error page and log it."""
+    try:
+        error_locator = page.locator("body:has-text('Fehlermeldung: Ungültiger Aufruf')")
+        if error_locator.count() > 0:
+            log("Encountered 'Ungültiger Aufruf' error page; will retry on next run")
+            return True
+    except Exception:
+        pass
+    return False

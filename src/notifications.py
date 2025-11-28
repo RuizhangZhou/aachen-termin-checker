@@ -1,6 +1,6 @@
 """Notification system module."""
 import time
-from mx_send import send_text
+from mx_send import send_text, send_image
 
 
 def log(msg):
@@ -35,3 +35,14 @@ def send_success_notification(message):
         log(f"Failed to send Matrix notification: {e}")
         # Send an error notification when Matrix delivery fails
         send_error_notification("Matrix notification delivery failed", e)
+
+
+def send_screenshot_notification(message: str, image_bytes: bytes, filename: str = "screenshot.png"):
+    """Send a screenshot to Matrix without persisting it locally."""
+    try:
+        log(message)
+        send_image(message, image_bytes, filename=filename)
+        log("Matrix screenshot notification sent")
+    except Exception as e:
+        log(f"Failed to send Matrix screenshot: {e}")
+        send_error_notification("Matrix screenshot delivery failed", e)

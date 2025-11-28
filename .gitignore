@@ -40,6 +40,7 @@ run_monitor.sh
 # Debug files
 debug_*.png
 captcha_*.png
+*.png
 *.log
 cron.log.*
 
