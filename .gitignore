@@ -43,6 +43,7 @@ captcha_*.png
 *.png
 *.log
 cron.log.*
+stats/
 
 # Browser automation
 state.json
