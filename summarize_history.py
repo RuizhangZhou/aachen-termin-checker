@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import gzip
 from pathlib import Path
 import re
@@ -28,6 +28,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from notifications import log, send_error_notification, send_success_notification  # type: ignore
+from timezone_utils import DISPLAY_TZ_LABEL, to_display_timezone  # type: ignore
 
 
 def _parse_args() -> argparse.Namespace:
@@ -55,7 +56,7 @@ def _iter_entries(paths: Sequence[Path]) -> List[Tuple[datetime, str]]:
                     if not match:
                         continue
                     timestamp = datetime.strptime(match.group("ts"), "%Y-%m-%d %H:%M:%S")
-                    entries.append((timestamp, match.group("msg")))
+                    entries.append((to_display_timezone(timestamp), match.group("msg")))
         except FileNotFoundError:
             continue
     entries.sort(key=lambda item: item[0])
@@ -223,6 +224,7 @@ def build_summary(
         f"🗂️ RWTH historical hotspots (data window {first_seen:%Y-%m-%d} → {last_seen:%Y-%m-%d})"
     )
     lines.append(header)
+    lines.append(f"Time zone: {DISPLAY_TZ_LABEL}")
     rate = total_detections / total_checks * 100 if total_checks else 0.0
     lines.append(
         f"Observed {total_checks} checks and {total_detections} detections ({rate:.2f}%)."

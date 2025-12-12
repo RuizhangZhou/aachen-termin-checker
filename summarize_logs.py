@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+import gzip
 import json
 from statistics import median
 from pathlib import Path
@@ -18,9 +19,11 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from notifications import log, send_error_notification, send_success_notification  # type: ignore
+from timezone_utils import DISPLAY_TZ, DISPLAY_TZ_LABEL, to_display_timezone  # type: ignore
 
 
-LOG_PATH = ROOT / "cron.log"
+LOG_DIR = ROOT
+LOG_PATTERN = re.compile(r"^cron\.log(\..+)?$")
 STATS_DIR = ROOT / "stats"
 STATS_PATH = STATS_DIR / "slot_detection_stats.json"
 LINE_PATTERN = re.compile(r"^\[(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?P<msg>.*)$")
@@ -51,21 +54,36 @@ def _parse_args() -> argparse.Namespace:
 def _resolve_target_date(arg: str | None) -> date:
     if arg:
         return datetime.strptime(arg, "%Y-%m-%d").date()
-    return date.today() - timedelta(days=1)
+    return (datetime.now(DISPLAY_TZ).date() - timedelta(days=1))
 
 
-def _iter_entries(path: Path) -> Iterable[tuple[datetime, str]]:
-    if not path.exists():
+def _iter_log_paths() -> List[Path]:
+    paths = [path for path in LOG_DIR.glob("cron.log*") if LOG_PATTERN.match(path.name)]
+    paths.sort(key=lambda path: path.stat().st_mtime)
+    return paths
+
+
+def _iter_entries(paths: Sequence[Path]) -> Iterable[tuple[datetime, str]]:
+    if not paths:
         return []
 
     def generator() -> Iterable[tuple[datetime, str]]:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                match = LINE_PATTERN.match(line.rstrip("\n"))
-                if not match:
-                    continue
-                timestamp = datetime.strptime(match.group("ts"), "%Y-%m-%d %H:%M:%S")
-                yield timestamp, match.group("msg")
+        for path in paths:
+            try:
+                if path.suffix == ".gz":
+                    handle = gzip.open(path, "rt", encoding="utf-8", errors="ignore")
+                else:
+                    handle = path.open("r", encoding="utf-8", errors="ignore")
+            except FileNotFoundError:
+                continue
+
+            with handle:
+                for line in handle:
+                    match = LINE_PATTERN.match(line.rstrip("\n"))
+                    if not match:
+                        continue
+                    timestamp = datetime.strptime(match.group("ts"), "%Y-%m-%d %H:%M:%S")
+                    yield to_display_timezone(timestamp), match.group("msg")
 
     return generator()
 
@@ -354,6 +372,7 @@ def build_summary(entries: Sequence[tuple[datetime, str]], target: date) -> Tupl
             error_events.append((timestamp, message))
 
     summary_lines: List[str] = [f"📝 RWTH monitor summary for {target:%Y-%m-%d}"]
+    summary_lines.append(f"Time zone: {DISPLAY_TZ_LABEL}")
     summary_lines.append(f"Checks performed: {len(run_times)}")
 
     if run_times:
@@ -380,7 +399,8 @@ def main() -> None:
     target_date = _resolve_target_date(args.target_date)
 
     try:
-        entries = _filter_entries(_iter_entries(LOG_PATH), target_date)
+        log_paths = _iter_log_paths()
+        entries = _filter_entries(_iter_entries(log_paths), target_date)
         summary_text, summary_lines = build_summary(entries, target_date)
 
         for line in summary_lines:
