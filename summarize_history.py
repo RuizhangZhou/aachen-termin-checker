@@ -8,10 +8,14 @@ from datetime import datetime, timedelta
 import gzip
 from pathlib import Path
 import re
+import shlex
+import subprocess
+import sys
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parent
 LOG_DIR = ROOT
+STATS_PATH = ROOT / "stats" / "slot_detection_stats.json"
 LOG_PATTERN = re.compile(r"cron\.log(\..+)?$")
 LINE_PATTERN = re.compile(r"^\[(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?P<msg>.*)$")
 BUCKET_MINUTES = 30
@@ -23,11 +27,15 @@ WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DEFAULT_INTERVAL_SECONDS = 180
 
 SRC_DIR = ROOT / "src"
-import sys
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from notifications import log, send_error_notification, send_success_notification  # type: ignore
+from notifications import (  # type: ignore
+    log,
+    send_error_notification,
+    send_success_notification,
+    send_screenshot_notification,
+)
 from timezone_utils import DISPLAY_TZ_LABEL, to_display_timezone  # type: ignore
 
 
@@ -37,6 +45,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-checks", type=int, default=MIN_CHECKS_FOR_BUCKET, help="Minimum checks for a bucket to be ranked")
     parser.add_argument("--top", type=int, default=TOP_BUCKETS, help="How many top buckets to include")
     parser.add_argument("--top-streaks", type=int, default=TOP_STREAKS, help="How many longest streaks to include")
+    parser.add_argument("--no-heatmap", action="store_true", help="Skip generating the weekly heatmap")
+    parser.add_argument("--heatmap-output", type=Path, default=ROOT / "stats" / "hotspots_weekly.png", help="Where to save the heatmap PNG")
+    parser.add_argument("--heatmap-recent-days", type=int, default=14, help="Window (in days) for the heatmap share calculation")
+    parser.add_argument("--heatmap-min-checks", type=int, default=10, help="Minimum checks per bucket for the heatmap")
+    parser.add_argument("--heatmap-top", type=int, default=8, help="How many buckets to label on the heatmap")
+    parser.add_argument("--heatmap-max-share", type=float, default=10.0, help="Color scale upper bound (%) for the heatmap (<=0 means auto)")
+    parser.add_argument("--heatmap-gamma", type=float, default=0.45, help="Gamma applied to the heatmap color scale")
     return parser.parse_args()
 
 
@@ -288,16 +303,94 @@ def build_summary(
     return summary_text, lines
 
 
+def _resolve_python() -> Path:
+    venv_python = ROOT / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return venv_python
+    return Path(sys.executable)
+
+
+def _normalize_output(path: Path) -> Path:
+    return path if path.is_absolute() else ROOT / path
+
+
+def _generate_heatmap(args: argparse.Namespace) -> Path | None:
+    if args.no_heatmap:
+        return None
+    if not STATS_PATH.exists():
+        log(f"Stats file {STATS_PATH} not found; skipping heatmap")
+        return None
+    script_path = ROOT / "plot_hotspots.py"
+    if not script_path.exists():
+        log("plot_hotspots.py not found; skipping heatmap")
+        return None
+
+    output_path = _normalize_output(args.heatmap_output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        str(_resolve_python()),
+        str(script_path),
+        "--stats-path",
+        str(STATS_PATH),
+        "--output",
+        str(output_path),
+        "--recent-days",
+        str(args.heatmap_recent_days),
+        "--min-checks",
+        str(args.heatmap_min_checks),
+        "--top",
+        str(args.heatmap_top),
+        "--max-share",
+        str(args.heatmap_max_share),
+        "--gamma",
+        str(args.heatmap_gamma),
+    ]
+    log("Rendering heatmap via: " + " ".join(shlex.quote(part) for part in cmd))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        log(f"Heatmap generation failed: {exc}")
+        if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+            log(f"Heatmap stderr: {exc.stderr.strip()}")
+        return None
+
+    if result.stdout:
+        for line in result.stdout.strip().splitlines():
+            log(f"[heatmap] {line}")
+    if result.stderr:
+        for line in result.stderr.strip().splitlines():
+            log(f"[heatmap err] {line}")
+    return output_path
+
+
+def _send_heatmap(path: Path, args: argparse.Namespace) -> None:
+    try:
+        image_bytes = path.read_bytes()
+    except OSError as exc:
+        log(f"Unable to read heatmap {path}: {exc}")
+        return
+    caption = (
+        f"📊 RWTH detection-share heatmap (last {args.heatmap_recent_days} days, "
+        f"min {args.heatmap_min_checks} checks)"
+    )
+    send_screenshot_notification(caption, image_bytes, filename=path.name)
+
+
 def main() -> None:
     args = _parse_args()
     try:
         paths = _iter_log_paths()
         entries = _iter_entries(paths)
         summary_text, summary_lines = build_summary(entries, args.top, args.min_checks, args.top_streaks)
+        heatmap_path = _generate_heatmap(args)
         for line in summary_lines:
             log(line)
         if not args.no_matrix:
             send_success_notification(summary_text)
+            if heatmap_path:
+                _send_heatmap(heatmap_path, args)
+        elif heatmap_path:
+            log(f"Heatmap saved to {heatmap_path}")
     except Exception as exc:
         log(f"Failed to build historical summary: {exc}")
         if not args.no_matrix:
