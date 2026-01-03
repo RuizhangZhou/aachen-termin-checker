@@ -3,7 +3,19 @@ import sys
 from pathlib import Path
 
 from .browser import BrowserManager
-from .config import AUTO_BOOK, LOCK_FILE, ANLIEGEN, STANDORT
+import json
+import time
+from datetime import datetime, timezone
+
+from .config import (
+    AUTO_BOOK,
+    LOCK_FILE,
+    ANLIEGEN,
+    STANDORT,
+    MONITOR_STATE_FILE,
+    ALERT_CHANGE_ONLY,
+    ALERT_MIN_INTERVAL_MINUTES,
+)
 from .notifications import log, send_error_notification, send_success_notification
 from .booking.navigation import goto_start, click_aufenthaltsangelegenheiten
 from .booking.selection import select_anliegen, select_standort
@@ -84,13 +96,64 @@ def run_once(headless=True):
 
 
 def monitor_mode():
-    """Monitor mode: check availability and send notifications."""
+    """Monitor mode with alert throttling and state-change detection."""
+    state_path = Path(__file__).resolve().parent.parent / MONITOR_STATE_FILE
+
+    # Load previous state
+    last_state = "none"  # "none" or "some"
+    last_alert_ts = 0
+    try:
+        if state_path.exists():
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+            last_state = data.get("last_state", "none")
+            last_alert_ts = int(data.get("last_alert_ts", 0))
+    except Exception as exc:
+        log(f"Failed to read monitor state: {exc}")
+
+    now_ts = int(time.time())
+    cooldown = max(0, int(ALERT_MIN_INTERVAL_MINUTES) * 60)
+
     slots = check_availability()
-    if slots:
-        message = f"⚠️ Appointment slots detected for SuperC Auslandsamt: {', '.join(slots[:5])}. Please book immediately."
+    has_slots = bool(slots)
+
+    # Decide whether to send
+    should_send = False
+    reason = ""
+
+    if has_slots:
+        if last_state != "some":
+            should_send = True
+            reason = "state change: none->some"
+        elif cooldown and (now_ts - last_alert_ts) >= cooldown:
+            should_send = True
+            reason = f"cooldown elapsed: >= {ALERT_MIN_INTERVAL_MINUTES} min"
+        elif not ALERT_CHANGE_ONLY and (now_ts - last_alert_ts) >= cooldown:
+            # Fallback path if someone disables change-only but keeps cooldown
+            should_send = True
+            reason = f"periodic reminder after {ALERT_MIN_INTERVAL_MINUTES} min"
+
+    if has_slots and should_send:
+        preview = ", ".join(slots[:5])
+        message = (
+            f"⚠️ Appointment slots detected for SuperC Auslandsamt: {preview}. Please book immediately."
+        )
+        log(f"Sending alert ({reason})")
         send_success_notification(message)
+        last_alert_ts = now_ts
+        last_state = "some"
+    elif has_slots and not should_send:
+        log("Slots detected but throttled (no->yes not triggered or cooldown not elapsed)")
+        last_state = "some"
     else:
         log("No slots currently available.")
+        last_state = "none"
+
+    # Persist state (only the minimal fields we need)
+    try:
+        state = {"last_state": last_state, "last_alert_ts": int(last_alert_ts)}
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+    except Exception as exc:
+        log(f"Failed to write monitor state: {exc}")
 
 
 def main():

@@ -13,6 +13,14 @@ AUTO_BOOK = os.getenv("AUTO_BOOK", "false").lower() == "true"
 LOCK_FILE = os.getenv("BOOK_ONCE_LOCK", "booked.lock")
 STORAGE_STATE = os.getenv("STORAGE_STATE", "state.json")
 SEND_MONITOR_SCREENSHOT = os.getenv("SEND_MONITOR_SCREENSHOT", "false").lower() == "true"
+MONITOR_STATE_FILE = os.getenv("MONITOR_STATE_FILE", ".monitor_state.json")
+
+# Alert throttling configuration
+ALERT_CHANGE_ONLY = os.getenv("ALERT_CHANGE_ONLY", "true").lower() == "true"
+try:
+    ALERT_MIN_INTERVAL_MINUTES = int(os.getenv("ALERT_MIN_INTERVAL_MINUTES", "120"))
+except ValueError:
+    ALERT_MIN_INTERVAL_MINUTES = 120
 
 # Applicant information configuration
 FIRST_NAME = os.getenv("APPLICANT_FIRST", "")
