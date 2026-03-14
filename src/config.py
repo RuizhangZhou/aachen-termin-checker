@@ -21,6 +21,12 @@ try:
     ALERT_MIN_INTERVAL_MINUTES = int(os.getenv("ALERT_MIN_INTERVAL_MINUTES", "120"))
 except ValueError:
     ALERT_MIN_INTERVAL_MINUTES = 120
+try:
+    ALERT_MIN_CONSECUTIVE_DETECTIONS = max(
+        1, int(os.getenv("ALERT_MIN_CONSECUTIVE_DETECTIONS", "1"))
+    )
+except ValueError:
+    ALERT_MIN_CONSECUTIVE_DETECTIONS = 1
 
 # Applicant information configuration
 FIRST_NAME = os.getenv("APPLICANT_FIRST", "")

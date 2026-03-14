@@ -1,7 +1,7 @@
 ## Aachen Termin Bot — Operations & Alerts
 
-### Realtime Monitoring (cron)
-- Runs every 3 minutes via `run_monitor.sh` (configured in crontab).
+### Realtime Monitoring (systemd timer)
+- Runs every 5 minutes via `run_monitor.sh` (configured in `aachen-watch.timer`).
 - Each run checks appointment availability and sends Matrix alerts according to throttling rules.
 
 ### Pause / Resume
@@ -24,9 +24,10 @@
 - Configurable via `.env` (defaults shown):
   - `ALERT_CHANGE_ONLY=true`
   - `ALERT_MIN_INTERVAL_MINUTES=60` (at most one alert per hour)
+  - `ALERT_MIN_CONSECUTIVE_DETECTIONS=1`
   - `MONITOR_STATE_FILE=.monitor_state.json`
 
-The state file lives at repo root; cron reads/updates it every run to enforce change‑only and cooldown behavior.
+The state file lives at repo root; each monitor run reads/updates it to enforce change‑only and cooldown behavior.
 
 ### Matrix Configuration (example)
 Put these in `.env` (replace placeholders):
@@ -36,6 +37,7 @@ Put these in `.env` (replace placeholders):
 MONITOR_ENABLED=true
 ALERT_CHANGE_ONLY=true
 ALERT_MIN_INTERVAL_MINUTES=60
+ALERT_MIN_CONSECUTIVE_DETECTIONS=1
 MONITOR_STATE_FILE=.monitor_state.json
 
 # Business configuration
@@ -62,16 +64,11 @@ These are independent from realtime monitoring; pausing monitoring does not affe
 - Tail recent log entries: `tail -n 100 cron.log`
 - When throttled during persistent availability you will see: `Slots detected but throttled …`.
 
-### Crontab Examples
+### systemd Timers
 ```
-# Realtime monitor every 3 minutes
-*/3 * * * * /root/aachen-termin-bot/run_monitor.sh >> /root/aachen-termin-bot/cron.log 2>&1
-
-# Daily summary at 04:30
-30 4 * * * bash -lc 'cd /root/aachen-termin-bot && source .env && source .venv/bin/activate && python summarize_logs.py' >> /root/aachen-termin-bot/cron.log 2>&1
-
-# Weekly hotspots (Mondays 05:00)
-0 5 * * Mon bash -lc 'cd /root/aachen-termin-bot && source .env && source .venv/bin/activate && python summarize_history.py' >> /root/aachen-termin-bot/cron.log 2>&1
+systemctl status aachen-watch.timer
+systemctl status aachen-daily-summary.timer
+systemctl status aachen-weekly-history.timer
 ```
 
 ### Hotspot Heatmap

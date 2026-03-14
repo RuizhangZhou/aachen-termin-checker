@@ -144,13 +144,14 @@ def check_availability():
                 log(f"Option not found: {ANLIEGEN}")
                 return []
 
-            # Select the option - use JavaScript if visibility blocks interaction
+            # Select the option without waiting on hidden inputs.
             try:
-                target_input.fill("1")
-                log(f"Selected: {ANLIEGEN}")
-            except Exception as e:
-                log(f"Standard fill failed, trying JavaScript: {e}")
-                # Use JavaScript to set the value directly
+                if target_input.is_visible():
+                    target_input.fill("1")
+                    log(f"Selected: {ANLIEGEN}")
+                else:
+                    raise RuntimeError("target input is hidden")
+            except Exception:
                 page.evaluate(f"""
                     const input = document.querySelector('input[data-tevis-cncname="{ANLIEGEN}"]');
                     if (input) {{

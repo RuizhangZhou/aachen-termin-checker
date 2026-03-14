@@ -5,6 +5,30 @@ from ..browser import handle_modal_dialog
 from ..notifications import log
 
 
+def _set_number_input(inp, count):
+    """Fill a numeric Anliegen input, falling back to JavaScript for hidden fields."""
+    try:
+        inp.scroll_into_view_if_needed()
+    except Exception:
+        pass
+
+    try:
+        if inp.is_visible():
+            inp.fill(str(count))
+            return
+    except Exception:
+        pass
+
+    inp.evaluate(
+        """(el, value) => {
+            el.value = String(value);
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        }""",
+        str(count),
+    )
+
+
 def select_anliegen(page, text, count=1):
     """Select the requested service."""
     log(f"Searching for option: {text}")
@@ -38,9 +62,7 @@ def select_anliegen(page, text, count=1):
         try:
             cnc_name = inp.get_attribute('data-tevis-cncname')
             if cnc_name and text == cnc_name:  # use exact match
-                # Scroll to the element
-                inp.scroll_into_view_if_needed()
-                inp.fill(str(count))
+                _set_number_input(inp, count)
                 log(f"Selected {cnc_name} with count {count}")
                 found = True
                 break
@@ -104,7 +126,7 @@ def select_standort(page, text):
     page.wait_for_load_state('networkidle')
     page.wait_for_timeout(2000)
 
-    # Locate the available site options
+    # Some TEVIS flows show explicit radio options, others expose standalone submit forms.
     inputs = page.locator('input[type="radio"], input[type="checkbox"]').all()
     log(f"Found {len(inputs)} location options")
 
@@ -141,7 +163,7 @@ def select_standort(page, text):
             log(f"Error while selecting location: {e}")
             continue
 
-    if not found:
+    if not found and inputs:
         # No match found; fall back to the first available option
         log("No matching location found, selecting the first option")
         try:
@@ -154,7 +176,46 @@ def select_standort(page, text):
             log(f"Failed to select the first location option: {e}")
 
     if not found:
+        forms = page.locator("form:has(input[name='select_location'])")
+        form_count = forms.count()
+        log(f"Found {form_count} location submit forms")
+        for idx in range(form_count):
+            form = forms.nth(idx)
+            try:
+                if not form.is_visible():
+                    continue
+            except Exception:
+                continue
+
+            form_text = (form.text_content() or "").strip()
+            if text and form_text and text.lower() not in form_text.lower() and form_count > 1:
+                continue
+
+            submit = form.locator(
+                "input[name='select_location'], button[name='select_location'], #WeiterButton"
+            ).first
+            if submit.count() == 0:
+                continue
+
+            try:
+                submit.scroll_into_view_if_needed()
+            except Exception:
+                pass
+
+            try:
+                submit.click()
+            except Exception:
+                form.evaluate("(el) => el.requestSubmit ? el.requestSubmit() : el.submit()")
+
+            log("Submitted the location form")
+            found = True
+            break
+
+    if not found:
         raise Exception(f"No matching location option found: {text}")
+
+    if page.locator("form:has(input[name='select_location'])").count() > 0 and not inputs:
+        return
 
     # Click the continue/submit button
     page.wait_for_timeout(2000)

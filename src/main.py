@@ -15,6 +15,7 @@ from .config import (
     MONITOR_STATE_FILE,
     ALERT_CHANGE_ONLY,
     ALERT_MIN_INTERVAL_MINUTES,
+    ALERT_MIN_CONSECUTIVE_DETECTIONS,
 )
 from .notifications import log, send_error_notification, send_success_notification
 from .booking.navigation import goto_start, click_aufenthaltsangelegenheiten
@@ -96,17 +97,19 @@ def run_once(headless=True):
 
 
 def monitor_mode():
-    """Monitor mode with alert throttling and state-change detection."""
+    """Monitor mode with alert throttling and persistence-aware detection."""
     state_path = Path(__file__).resolve().parent.parent / MONITOR_STATE_FILE
 
-    # Load previous state
+    # Load previous alert state
     last_state = "none"  # "none" or "some"
     last_alert_ts = 0
+    consecutive_slot_runs = 0
     try:
         if state_path.exists():
             data = json.loads(state_path.read_text(encoding="utf-8"))
             last_state = data.get("last_state", "none")
             last_alert_ts = int(data.get("last_alert_ts", 0))
+            consecutive_slot_runs = max(0, int(data.get("consecutive_slot_runs", 0)))
     except Exception as exc:
         log(f"Failed to read monitor state: {exc}")
 
@@ -115,24 +118,29 @@ def monitor_mode():
 
     slots = check_availability()
     has_slots = bool(slots)
+    if has_slots:
+        consecutive_slot_runs += 1
+    else:
+        consecutive_slot_runs = 0
+
+    min_detections = max(1, int(ALERT_MIN_CONSECUTIVE_DETECTIONS))
+    slots_are_persistent = has_slots and consecutive_slot_runs >= min_detections
 
     # Decide whether to send
     should_send = False
     reason = ""
 
-    if has_slots:
+    if slots_are_persistent:
         if last_state != "some":
             should_send = True
-            reason = "state change: none->some"
-        elif cooldown and (now_ts - last_alert_ts) >= cooldown:
-            should_send = True
-            reason = f"cooldown elapsed: >= {ALERT_MIN_INTERVAL_MINUTES} min"
-        elif not ALERT_CHANGE_ONLY and (now_ts - last_alert_ts) >= cooldown:
-            # Fallback path if someone disables change-only but keeps cooldown
+            reason = f"availability persisted for {consecutive_slot_runs} consecutive runs"
+        elif not ALERT_CHANGE_ONLY and (
+            cooldown == 0 or (now_ts - last_alert_ts) >= cooldown
+        ):
             should_send = True
             reason = f"periodic reminder after {ALERT_MIN_INTERVAL_MINUTES} min"
 
-    if has_slots and should_send:
+    if slots_are_persistent and should_send:
         preview = ", ".join(slots[:5])
         message = (
             f"⚠️ Appointment slots detected for SuperC Auslandsamt: {preview}. Please book immediately."
@@ -141,8 +149,17 @@ def monitor_mode():
         send_success_notification(message)
         last_alert_ts = now_ts
         last_state = "some"
-    elif has_slots and not should_send:
-        log("Slots detected but throttled (no->yes not triggered or cooldown not elapsed)")
+    elif has_slots and not slots_are_persistent:
+        log(
+            "Slots detected but waiting for persistence threshold "
+            f"({consecutive_slot_runs}/{min_detections} consecutive runs)"
+        )
+        last_state = "none"
+    elif slots_are_persistent and not should_send:
+        if ALERT_CHANGE_ONLY:
+            log("Persistent slots detected but change-only mode suppressed a reminder")
+        else:
+            log("Persistent slots detected but throttled until the reminder cooldown elapses")
         last_state = "some"
     else:
         log("No slots currently available.")
@@ -150,7 +167,11 @@ def monitor_mode():
 
     # Persist state (only the minimal fields we need)
     try:
-        state = {"last_state": last_state, "last_alert_ts": int(last_alert_ts)}
+        state = {
+            "last_state": last_state,
+            "last_alert_ts": int(last_alert_ts),
+            "consecutive_slot_runs": int(consecutive_slot_runs),
+        }
         state_path.write_text(json.dumps(state), encoding="utf-8")
     except Exception as exc:
         log(f"Failed to write monitor state: {exc}")
