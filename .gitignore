@@ -49,6 +49,8 @@ stats/
 state.json
 *.lock
 .monitor_no_slot_sent
+.monitor_state.json
+.monitor_paused
 
 # IDE
 .vscode/
