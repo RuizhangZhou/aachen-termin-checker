@@ -1,5 +1,6 @@
 """Core browser helpers."""
 import re
+import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from .config import STORAGE_STATE
@@ -11,30 +12,70 @@ class BrowserManager:
 
     def __init__(self, headless=True):
         self.headless = headless
+        self.launch_attempts = 3
+        self.playwright = None
+        self.p = None
         self.browser = None
         self.context = None
         self.page = None
 
     def __enter__(self):
-        self.playwright = sync_playwright()
-        self.p = self.playwright.__enter__()
-        self.browser = self.p.chromium.launch(headless=self.headless)
+        last_exc = None
+        for attempt in range(1, self.launch_attempts + 1):
+            try:
+                self.playwright = sync_playwright()
+                self.p = self.playwright.__enter__()
+                self.browser = self.p.chromium.launch(
+                    headless=self.headless,
+                    args=["--disable-gpu"],
+                )
 
-        ctx_kwargs = {}
-        if Path(STORAGE_STATE).exists():
-            ctx_kwargs["storage_state"] = STORAGE_STATE
+                ctx_kwargs = {}
+                if Path(STORAGE_STATE).exists():
+                    ctx_kwargs["storage_state"] = STORAGE_STATE
 
-        self.context = self.browser.new_context(**ctx_kwargs)
-        self.page = self.context.new_page()
-        self.page.set_default_timeout(15000)
+                self.context = self.browser.new_context(**ctx_kwargs)
+                self.page = self.context.new_page()
+                self.page.set_default_timeout(15000)
 
-        return self.page
+                return self.page
+            except Exception as exc:
+                last_exc = exc
+                brief = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+                log(
+                    "Browser launch/setup attempt "
+                    f"{attempt}/{self.launch_attempts} failed: {brief}"
+                )
+                self._cleanup(None, None, None)
+                if attempt < self.launch_attempts:
+                    time.sleep(2 * attempt)
+
+        raise last_exc
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self._cleanup(exc_type, exc_val, exc_tb)
+
+    def _cleanup(self, exc_type, exc_val, exc_tb):
+        if self.context:
+            try:
+                self.context.close()
+            except Exception:
+                pass
+            self.context = None
         if self.browser:
-            self.browser.close()
+            try:
+                self.browser.close()
+            except Exception:
+                pass
+            self.browser = None
+        self.page = None
         if self.playwright:
-            self.playwright.__exit__(exc_type, exc_val, exc_tb)
+            try:
+                self.playwright.__exit__(exc_type, exc_val, exc_tb)
+            except Exception:
+                pass
+            self.playwright = None
+            self.p = None
 
 
 def accept_cookies(page):
